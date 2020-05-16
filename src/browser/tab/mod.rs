@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::thread;
@@ -40,7 +41,7 @@ pub type RequestInterceptor = Box<
     dyn Fn(
             Arc<Transport>,
             SessionId,
-            protocol::network::events::RequestInterceptedEventParams,
+            &mut protocol::network::events::RequestInterceptedEventParams,
         ) -> RequestInterceptionDecision
         + Send
         + Sync,
@@ -227,19 +228,32 @@ impl<'a> Tab {
                             _ => {}
                         }
                     }
-                    Event::RequestIntercepted(interception_event) => {
+                    Event::RequestIntercepted(mut interception_event) => {
                         let id = interception_event.params.interception_id.clone();
                         let interceptor = interceptor_mutex.lock().unwrap();
                         let decision = interceptor(
                             Arc::clone(&transport),
                             session_id.clone(),
-                            interception_event.params,
+                            &mut interception_event.params,
                         );
                         match decision {
                             RequestInterceptionDecision::Continue => {
+                                let request = interception_event.params.request;
                                 let method = network::methods::ContinueInterceptedRequest {
                                     interception_id: &id,
-                                    ..Default::default()
+                                    error_reason: None,
+                                    raw_response: None,
+                                    url: Some(&request.url),
+                                    method: Some(&request.method),
+                                    post_data: request.post_data.as_deref(),
+                                    headers: Some(
+                                        request
+                                            .headers
+                                            .iter()
+                                            .map(|(k, v)| (k.as_str(), v.as_str()))
+                                            .collect::<HashMap<&str, &str>>(),
+                                    ),
+                                    auth_challenge_response: None,
                                 };
                                 let result =
                                     transport.call_method_on_target(session_id.clone(), method);
